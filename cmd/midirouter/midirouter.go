@@ -4,6 +4,7 @@ import (
 	"MIDIRouter/config"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/youpy/go-coremidi"
 )
@@ -13,9 +14,9 @@ const (
 )
 
 func main() {
-	if len(os.Args) != 2 {
+	if len(os.Args) < 2 {
 		fmt.Printf("MIDIRouter v%s\n", version)
-		fmt.Println("Usage:", os.Args[0], "<config file>")
+		fmt.Println("Usage:", os.Args[0], "<config file 1> [config file 2] ...")
 		fmt.Println("MIDI inputs:")
 		sources, err := coremidi.AllSources()
 		if err != nil {
@@ -37,11 +38,21 @@ func main() {
 		return
 	}
 
-	router, err := config.LoadConfig(os.Args[1])
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	router.Start()
+	var wg sync.WaitGroup
 
+	for _, configFile := range os.Args[1:] {
+		wg.Add(1)
+		go func(file string) {
+			defer wg.Done()
+
+			router, err := config.LoadConfig(file)
+			if err != nil {
+				fmt.Printf("Error loading config %s: %v\n", file, err)
+				return
+			}
+			router.Start()
+		}(configFile)
+	}
+
+	wg.Wait()
 }

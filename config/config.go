@@ -245,7 +245,7 @@ func LoadConfig(configPath string) (*router.MIDIRouter, error) {
 			}
 			newRule.SetGenerator(g)
 		default:
-			return nil, errors.New("Pailed to add rule, invalid generate type.")
+			return nil, errors.New("Failed to add rule, invalid generate type.")
 		}
 
 		relay.AddRule(newRule)
