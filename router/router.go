@@ -76,8 +76,7 @@ func (relay *MIDIRouter) AddRule(rule *rule.Rule) {
 }
 
 func (relay *MIDIRouter) onPacket(source coremidi.Source, packet coremidi.Packet) {
-
-	if relay.verbose == true {
+	if relay.verbose {
 		fmt.Printf(
 			"device: %v, manufacturer: %v, source: %v, data: %v\n",
 			source.Entity().Device().Name(),
@@ -87,13 +86,32 @@ func (relay *MIDIRouter) onPacket(source coremidi.Source, packet coremidi.Packet
 		)
 	}
 
-	ruleMAtched := false
+	// if it's a SysEx message, handle it directly without splitting
+	if len(packet.Data) > 0 && packet.Data[0] == 0xF0 {
+		relay.handleSinglePacket(packet)
+		return
+	}
+
+	// For non-SysEx messages, proceed with splitting if needed
+	if len(packet.Data) > 3 {
+		// Only split if packet is longer than max standard MIDI message
+		messages := splitMIDIData(packet.Data)
+		for _, msg := range messages {
+			relay.handleSinglePacket(coremidi.Packet{Data: msg})
+		}
+	} else {
+		// Single short message - process directly
+		relay.handleSinglePacket(packet)
+	}
+}
+
+func (relay *MIDIRouter) handleSinglePacket(packet coremidi.Packet) {
+	ruleMatched := false
 	for _, r := range relay.rules {
 		if len(packet.Data) == 0 {
 			continue
 		}
 
-		//Stop on first rule success
 		match, newPacket := r.Match(packet, relay.verbose)
 		if match == rule.RuleMatchResultMatchInject {
 			if relay.verbose {
@@ -107,20 +125,19 @@ func (relay *MIDIRouter) onPacket(source coremidi.Source, packet coremidi.Packet
 			}
 			newPacket.Send(&relay.destPort, &relay.destination)
 			relay.lastMIDIMsg = time.Now()
-			ruleMAtched = true
+			ruleMatched = true
 			break
 		} else if match == rule.RuleMatchResultMatchNoInject {
-			ruleMAtched = true
+			ruleMatched = true
 			break
 		}
 	}
 
-	if (ruleMAtched == false) && (relay.verbose == true) {
+	if (ruleMatched == false) && (relay.verbose == true) {
 		fmt.Println("-> No match")
 	}
 
-	//no match, apply passthrough if set
-	if (ruleMAtched == false) && (relay.defaultPassThrough == true) {
+	if (ruleMatched == false) && (relay.defaultPassThrough == true) {
 		if time.Since(relay.lastMIDIMsg) <= relay.sendLimit {
 			fmt.Println("Ignoring midi message (send limit)")
 			return
@@ -128,5 +145,38 @@ func (relay *MIDIRouter) onPacket(source coremidi.Source, packet coremidi.Packet
 		packet.Send(&relay.destPort, &relay.destination)
 		relay.lastMIDIMsg = time.Now()
 	}
-	return
+}
+
+func splitMIDIData(data []byte) [][]byte {
+	var messages [][]byte
+	for i := 0; i < len(data); {
+		status := data[i]
+		length := midiMessageLength(status)
+		if i+length > len(data) {
+			break
+		}
+		messages = append(messages, data[i:i+length])
+		i += length
+	}
+	return messages
+}
+
+func midiMessageLength(status byte) int {
+	switch status & 0xF0 {
+	case 0x80, 0x90, 0xA0, 0xB0, 0xE0:
+		return 3
+	case 0xC0, 0xD0:
+		return 2
+	case 0xF0:
+		switch status {
+		case 0xF1, 0xF3:
+			return 2
+		case 0xF2:
+			return 3
+		default:
+			return 1
+		}
+	default:
+		return 1
+	}
 }
