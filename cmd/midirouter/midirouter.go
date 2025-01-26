@@ -1,17 +1,22 @@
 package main
 
 import (
-	"MIDIRouter/config"
 	"fmt"
 	"os"
-	"sync"
+	"os/signal"
+	"syscall"
 
 	"github.com/youpy/go-coremidi"
+
+	"MIDIRouter/config"
+	"MIDIRouter/router"
 )
 
 const (
 	version = "1.2"
 )
+
+var routers []*router.MIDIRouter
 
 func main() {
 	if len(os.Args) < 2 {
@@ -38,21 +43,27 @@ func main() {
 		return
 	}
 
-	var wg sync.WaitGroup
+	sigchan := make(chan os.Signal, 1)
+	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
 
-	for _, configFile := range os.Args[1:] {
-		wg.Add(1)
-		go func(file string) {
-			defer wg.Done()
+	go func() {
+		for _, configFile := range os.Args[1:] {
+			go startRouter(configFile)
+		}
+	}()
 
-			router, err := config.LoadConfig(file)
-			if err != nil {
-				fmt.Printf("Error loading config %s: %v\n", file, err)
-				return
-			}
-			router.Start()
-		}(configFile)
+	<-sigchan
+	for _, router := range routers {
+		router.Cleanup()
 	}
+}
 
-	wg.Wait()
+func startRouter(file string) {
+	router, err := config.LoadConfig(file)
+	if err != nil {
+		fmt.Printf("Error loading config %s: %v\n", file, err)
+		return
+	}
+	routers = append(routers, router)
+	router.Start()
 }

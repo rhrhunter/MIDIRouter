@@ -180,3 +180,15 @@ func midiMessageLength(status byte) int {
 		return 1
 	}
 }
+
+func (relay *MIDIRouter) Cleanup() {
+	for ch := 0; ch < 16; ch++ {
+		// All notes off
+		packet := coremidi.Packet{Data: []byte{0xB0 | byte(ch), 123, 0}}
+		packet.Send(&relay.destPort, &relay.destination)
+
+		// Reset all controllers
+		packet = coremidi.Packet{Data: []byte{0xB0 | byte(ch), 121, 0}}
+		packet.Send(&relay.destPort, &relay.destination)
+	}
+}
