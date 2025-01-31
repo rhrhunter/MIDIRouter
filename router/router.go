@@ -105,6 +105,16 @@ func (relay *MIDIRouter) onPacket(source coremidi.Source, packet coremidi.Packet
 }
 
 func (relay *MIDIRouter) handleSinglePacket(packet coremidi.Packet) {
+	if (relay.defaultPassThrough == true) {
+		if time.Since(relay.lastMIDIMsg) <= relay.sendLimit {
+			fmt.Println("Ignoring midi message (send limit)")
+			return
+		}
+		packet.Send(&relay.destPort, &relay.destination)
+		relay.lastMIDIMsg = time.Now()
+		return
+	}
+
 	ruleMatched := false
 	for _, r := range relay.rules {
 		if len(packet.Data) == 0 {
@@ -134,15 +144,6 @@ func (relay *MIDIRouter) handleSinglePacket(packet coremidi.Packet) {
 
 	if (ruleMatched == false) && (relay.verbose == true) {
 		fmt.Println("-> No match")
-	}
-
-	if (ruleMatched == false) && (relay.defaultPassThrough == true) {
-		if time.Since(relay.lastMIDIMsg) <= relay.sendLimit {
-			fmt.Println("Ignoring midi message (send limit)")
-			return
-		}
-		packet.Send(&relay.destPort, &relay.destination)
-		relay.lastMIDIMsg = time.Now()
 	}
 }
 
