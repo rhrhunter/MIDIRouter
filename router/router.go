@@ -69,6 +69,10 @@ func (relay *MIDIRouter) Start() {
 	}
 }
 
+func (relay *MIDIRouter) Cleanup() {
+	relay.sendAllNotesOffAndResetControllers()
+}
+
 func (relay *MIDIRouter) AddRule(rule *rule.Rule) {
 	relay.rules = append(relay.rules, rule)
 	fmt.Println(rule)
@@ -111,6 +115,11 @@ func (relay *MIDIRouter) handleSinglePacket(packet coremidi.Packet) {
 			return
 		}
 		packet.Send(&relay.destPort, &relay.destination)
+
+		if len(packet.Data) > 0 && packet.Data[0] == 0xFC { // Stop message
+			relay.sendAllNotesOffAndResetControllers()
+		}
+
 		relay.lastMIDIMsg = time.Now()
 		return
 	}
@@ -181,7 +190,7 @@ func midiMessageLength(status byte) int {
 	}
 }
 
-func (relay *MIDIRouter) Cleanup() {
+func (relay *MIDIRouter) sendAllNotesOffAndResetControllers() {
 	for ch := 0; ch < 16; ch++ {
 		// All notes off
 		packet := coremidi.Packet{Data: []byte{0xB0 | byte(ch), 123, 0}}
