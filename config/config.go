@@ -60,6 +60,7 @@ type TransformConfig struct {
 	ToMax         int
 	Mode          string
 	NoiseSettings NoiseSettingsConfig `json:"NoiseSettings,omitempty"`
+	// No additional settings needed for PreventRunningStatus
 }
 
 // Add a new struct for noise settings in config
@@ -229,6 +230,7 @@ func LoadConfig(configPath string) (*router.MIDIRouter, error) {
 				// Set noise settings on the rule
 				newRule.SetNoiseSettings(noiseSettings)
 			}
+			// PreventRunningStatus doesn't need additional settings
 		}
 
 		//Drop consecutive identical values?
@@ -317,6 +319,8 @@ func stringToTransformMode(str string) (rule.TransformMode, error) {
 		return rule.TransformModeLinearDrop, nil
 	case "Noise":
 		return rule.TransformModeNoise, nil
+	case "PreventRunningStatus":
+		return rule.TransformModePreventRunStatus, nil
 	default:
 		return rule.TransformModeNone, errors.New("Invalid transform mode: " + str)
 	}
