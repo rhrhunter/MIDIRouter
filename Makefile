@@ -97,3 +97,18 @@ coverage: ## Generate test coverage report
 .PHONY: install
 install: build ## Install the binary into ~/go/bin
 	cp ./$(BIN_DIR)/$(BIN_NAME) ~/go/bin/$(BIN_NAME)
+
+# Dump repository contents
+.PHONY: dump
+dump: ## Display the repository structure and contents of go.mod, go.sum, and all *.go files
+	@echo "Repository Structure:"
+	@tree
+	@echo "\n=== go.mod ===\n"
+	@cat go.mod
+	@echo "\n=== go.sum ===\n"
+	@cat go.sum
+	@echo "\n=== *.go files ===\n"
+	@find . -name "*.go" | sort | while read file; do \
+		echo "\n--- $$file ---\n"; \
+		cat "$$file"; \
+	done
