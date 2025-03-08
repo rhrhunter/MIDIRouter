@@ -6,6 +6,7 @@ import (
 	"MIDIRouter/generatorinterface"
 	"errors"
 	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/youpy/go-coremidi"
@@ -25,6 +26,7 @@ const (
 	TransformModeNone       = iota
 	TransformModeLinear     = iota
 	TransformModeLinearDrop = iota
+	TransformModeNoise      = iota // New transform mode for noise
 	/*
 		Transform7bitsTo100   = iota // Convert a 7bits [0-127] value to a displayed [0-100] value
 		Transform14bitsTo100  = iota // Convert a 14bits [0-16383] value to a displayed [0-100] value
@@ -34,12 +36,23 @@ const (
 		Transform14bitsTo127  = iota // Convert a 14bits [0-16383] value to a [0-127] value*/
 )
 
+// Define a new NoiseSettings struct
+type NoiseSettings struct {
+	MsgType    filter.FilterMsgType // MIDI message type for noise
+	Channel    filter.FilterChannel // MIDI channel for noise
+	MinValue   uint8                // Minimum noise value
+	MaxValue   uint8                // Maximum noise value
+	DelayMsMin uint16               // Minimum delay in milliseconds
+	DelayMsMax uint16               // Maximum delay in milliseconds
+}
+
 type Transform struct {
-	mode    TransformMode
-	fromMin uint32
-	fromMax uint32
-	toMin   uint32
-	toMax   uint32
+	mode          TransformMode
+	fromMin       uint32
+	fromMax       uint32
+	toMin         uint32
+	toMax         uint32
+	noiseSettings NoiseSettings // New field for noise settings
 }
 
 type Rule struct {
@@ -65,7 +78,18 @@ func New(ruleName string) (*Rule, error) {
 }
 
 func (r *Rule) SetTransform(mode TransformMode, fromMin uint32, fromMax uint32, toMin uint32, toMax uint32) {
-	r.transform = Transform{mode: mode, fromMin: fromMin, fromMax: fromMax, toMin: toMin, toMax: toMax}
+	r.transform = Transform{
+		mode:    mode,
+		fromMin: fromMin,
+		fromMax: fromMax,
+		toMin:   toMin,
+		toMax:   toMax,
+	}
+}
+
+// Add a method to set noise settings
+func (r *Rule) SetNoiseSettings(noiseSettings NoiseSettings) {
+	r.transform.noiseSettings = noiseSettings
 }
 
 func (r *Rule) SetFilter(f filterinterface.FilterInterface) error {
@@ -89,7 +113,43 @@ func (r *Rule) SetGenerator(g generatorinterface.GeneratorInterface) error {
 	return nil
 }
 
-func (r *Rule) Match(packet coremidi.Packet, verbose bool) (RuleMatchResult, coremidi.Packet) {
+// Add new function to generate a noise packet
+func (r *Rule) generateNoisePacket(packet coremidi.Packet, value uint16) coremidi.Packet {
+	// Get random values for noise
+	ns := r.transform.noiseSettings
+
+	// Generate random value between MinValue and MaxValue
+	randVal := ns.MinValue
+	if ns.MaxValue > ns.MinValue {
+		randVal = ns.MinValue + uint8(rand.Intn(int(ns.MaxValue-ns.MinValue+1)))
+	}
+
+	// Create status byte based on message type and channel
+	// Fix: Properly convert to byte with appropriate casting
+	msgType := byte(ns.MsgType)
+	channel := byte(ns.Channel)
+	statusByte := byte((msgType << 4) | channel)
+
+	// Create MIDI message based on message type
+	var data []byte
+	switch ns.MsgType {
+	case filter.FilterMsgTypeNoteOn, filter.FilterMsgTypeNoteOff, filter.FilterMsgTypeAftertouch,
+		filter.FilterMsgTypeControlChange, filter.FilterMsgTypePitchWheel:
+		// Two data bytes (e.g., note/control number and velocity/value)
+		data = []byte{statusByte, byte(value & 0x7F), randVal}
+	case filter.FilterMsgTypeProgramChange, filter.FilterMsgTypeChannelPressure:
+		// One data byte (e.g., program number or pressure value)
+		data = []byte{statusByte, randVal}
+	default:
+		// Default to a simple message with just the random value
+		data = []byte{statusByte, randVal}
+	}
+
+	return coremidi.NewPacket(data, packet.TimeStamp)
+}
+
+// Update the Match method to handle noise
+func (r *Rule) Match(packet coremidi.Packet, verbose bool, router interface{}) (RuleMatchResult, coremidi.Packet) {
 	msgType := filter.FilterMsgType((packet.Data[0] & 0xF0) >> 4)
 	channel := filter.FilterChannel(packet.Data[0] & 0x0F)
 	if r.filter.QuickMatch(msgType, channel) == false {
@@ -114,84 +174,82 @@ func (r *Rule) Match(packet coremidi.Packet, verbose bool) (RuleMatchResult, cor
 		fmt.Println("Filter", r.String(), "matched. Extracted value:", value)
 		fmt.Println("-> Extracted value:", value)
 	}
-	//Transform
+
+	// Transform the value based on transform mode
+	transformedValue := value
 	switch r.transform.mode {
 	case TransformModeLinear:
-		//Alright, this is serious mathematics.
-		//Transform 'value' which should be in the range [r.transform.fromMin, r.transform.fromMax]
-		//										   to a value in the range [r.transform.toMin, r.transform.toMax]
-		// A(r.transform.fromMin, r.transform.toMin) / B(r.transform.fromMax, r.transform.toMax)
+		// Linear transformation logic
 		a := float64(r.transform.toMax-r.transform.toMin) / float64(r.transform.fromMax-r.transform.fromMin)
-		//y = ax + b => b = y - ax
 		b := float64(r.transform.toMin) - a*float64(r.transform.fromMin)
-		value = uint16(a*float64(value) + float64(b))
+		transformedValue = uint16(a*float64(value) + float64(b))
 	case TransformModeLinearDrop:
-		//Input out of bounds
+		// Check bounds and apply linear transformation
 		if (uint32(value) > r.transform.fromMax) || (uint32(value) < r.transform.fromMin) {
-			fmt.Println("-> Tranform dropped out of bounds input value")
+			fmt.Println("-> Transform dropped out of bounds input value")
 			return RuleMatchResultNoMatch, packet
 		}
-		//Alright, this is serious mathematics.
-		//Transform 'value' which should be in the range [r.transform.fromMin, r.transform.fromMax]
-		//										   to a value in the range [r.transform.toMin, r.transform.toMax]
-		// A(r.transform.fromMin, r.transform.toMin) / B(r.transform.fromMax, r.transform.toMax)
 		a := float64(r.transform.toMax-r.transform.toMin) / float64(r.transform.fromMax-r.transform.fromMin)
-		//y = ax + b => b = y - ax
 		b := float64(r.transform.toMin) - a*float64(r.transform.fromMin)
 		v := uint16(a*float64(value) + float64(b))
-		//Input out of bounds
 		if (uint32(v) > r.transform.toMax) || (uint32(v) < r.transform.toMin) {
-			fmt.Println("-> Tranform dropped out of bounds output value")
+			fmt.Println("-> Transform dropped out of bounds output value")
 			return RuleMatchResultNoMatch, packet
 		}
-		value = v
-	case TransformModeNone:
-	default:
-	}
-	/*
-		switch r.transform {
-		case Transform7bitsTo100:
-			value = uint16((float32(value) * 100.0) / 0x7F)
-		case Transform14bitsTo100:
-			value = uint16((float32(value) * 100.0) / 0x3FFF)
-		case Transform7bitsTo1000:
-			value = uint16((float32(value) * 1000.0) / 0x7F)
-		case Transform14bitsTo1000:
-			value = uint16((float32(value) * 1000.0) / 0x3FFF)
-		case Transform14bitsTo127:
-			value = uint16((float32(value) * 127.0) / 0x3FFF)
-		case TransformNone:
-		case Transform7bitsTo127:
-		default:
+		transformedValue = v
+	case TransformModeNoise:
+		// Apply normal linear transformation first
+		a := float64(r.transform.toMax-r.transform.toMin) / float64(r.transform.fromMax-r.transform.fromMin)
+		b := float64(r.transform.toMin) - a*float64(r.transform.fromMin)
+		transformedValue = uint16(a*float64(value) + float64(b))
+
+		// Generate and schedule noise packet to be sent after the main packet
+		if verbose {
+			fmt.Println("-> Generating noise packet")
 		}
-		if r.transform != TransformNone {
-			fmt.Println("-> Converted value: ", value)
-		}*/
-	if verbose {
-		fmt.Println("-> Transformed value:", value)
+		noisePacket := r.generateNoisePacket(packet, value)
+
+		// Schedule noise packet to be sent after a random delay
+		ns := r.transform.noiseSettings
+		delayMs := ns.DelayMsMin
+		if ns.DelayMsMax > ns.DelayMsMin {
+			delayMs = ns.DelayMsMin + uint16(rand.Intn(int(ns.DelayMsMax-ns.DelayMsMin+1)))
+		}
+
+		// Use the router to send the noise packet with delay
+		if midiRouter, ok := router.(MIDIRouter); ok {
+			midiRouter.SendNoisePacket(noisePacket, time.Duration(delayMs)*time.Millisecond)
+			if verbose {
+				fmt.Println("-> Scheduled noise packet with delay", delayMs, "ms")
+			}
+		} else if verbose {
+			fmt.Println("-> Cannot send noise packet: router not available")
+		}
 	}
-	//Drop?
-	if r.dropDuplicates && (r.lastValue == value) && (time.Since(r.lastValueTs) < r.dropDuplicatesTimeout) {
+
+	if verbose {
+		fmt.Println("-> Transformed value:", transformedValue)
+	}
+
+	// Apply duplicate check
+	if r.dropDuplicates && (r.lastValue == transformedValue) && (time.Since(r.lastValueTs) < r.dropDuplicatesTimeout) {
 		fmt.Println("-> Ignored duplicate")
 		return RuleMatchResultMatchNoInject, packet
 	}
-	r.lastValue = value
+	r.lastValue = transformedValue
 	r.lastValueTs = time.Now()
 
-	//Generate output
-	newPacket, err := r.output(packet, value)
+	// Generate output
+	newPacket, err := r.output(packet, transformedValue)
 	if err != nil {
 		fmt.Println(err)
 		return RuleMatchResultMatchInject, packet
 	} else {
 		return RuleMatchResultMatchInject, newPacket
 	}
-	return RuleMatchResultMatchInject, packet
-
 }
 
 func (r *Rule) output(packet coremidi.Packet, value uint16) (newPacket coremidi.Packet, err error) {
-
 	newPacket, err = r.generator.Generate(packet, value)
 	if err != nil {
 		return packet, err
@@ -211,7 +269,6 @@ func (r Rule) String() string {
 }
 
 func (t Transform) String() string {
-
 	switch t.mode {
 	case TransformModeNone:
 		return "None"
@@ -219,6 +276,17 @@ func (t Transform) String() string {
 		return fmt.Sprintf("Linear from [%d, %d] to [%d, %d]", t.fromMin, t.fromMax, t.toMin, t.toMax)
 	case TransformModeLinearDrop:
 		return fmt.Sprintf("Linear from [%d, %d] to [%d, %d] (drop out of range values)", t.fromMin, t.fromMax, t.toMin, t.toMax)
+	case TransformModeNoise:
+		return fmt.Sprintf("Noise from [%d, %d] to [%d, %d] with noise (channel %s, msgType %s, value range [%d, %d], delay [%d, %d]ms)",
+			t.fromMin, t.fromMax, t.toMin, t.toMax,
+			t.noiseSettings.Channel.String(), t.noiseSettings.MsgType.String(),
+			t.noiseSettings.MinValue, t.noiseSettings.MaxValue,
+			t.noiseSettings.DelayMsMin, t.noiseSettings.DelayMsMax)
 	}
 	return "?"
+}
+
+// Define MIDIRouter interface for use in Match
+type MIDIRouter interface {
+	SendNoisePacket(packet coremidi.Packet, delayMs time.Duration)
 }

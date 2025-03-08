@@ -52,12 +52,24 @@ type FilterConfig struct {
 	Settings json.RawMessage
 }
 
+// Update the TransformConfig struct to include noise settings
 type TransformConfig struct {
-	FromMin int
-	FromMax int
-	ToMin   int
-	ToMax   int
-	Mode    string
+	FromMin       int
+	FromMax       int
+	ToMin         int
+	ToMax         int
+	Mode          string
+	NoiseSettings NoiseSettingsConfig `json:"NoiseSettings,omitempty"`
+}
+
+// Add a new struct for noise settings in config
+type NoiseSettingsConfig struct {
+	MsgType    string `json:"MsgType"`
+	Channel    string `json:"Channel"`
+	MinValue   int    `json:"MinValue"`
+	MaxValue   int    `json:"MaxValue"`
+	DelayMsMin int    `json:"DelayMsMin"`
+	DelayMsMax int    `json:"DelayMsMax"`
 }
 
 type GeneratorConfig struct {
@@ -104,7 +116,6 @@ func LoadConfig(configPath string) (*router.MIDIRouter, error) {
 	relay.SetSendLimit(time.Duration(config.SendLimitMs) * time.Millisecond)
 
 	for _, r := range config.Rules {
-
 		newRule, _ := rule.New(r.Name)
 
 		//Load input filter from config
@@ -178,7 +189,46 @@ func LoadConfig(configPath string) (*router.MIDIRouter, error) {
 			return nil, err
 		}
 		if transformMode != rule.TransformModeNone {
-			newRule.SetTransform(transformMode, uint32(r.Transform.FromMin), uint32(r.Transform.FromMax), uint32(r.Transform.ToMin), uint32(r.Transform.ToMax))
+			newRule.SetTransform(
+				transformMode,
+				uint32(r.Transform.FromMin),
+				uint32(r.Transform.FromMax),
+				uint32(r.Transform.ToMin),
+				uint32(r.Transform.ToMax),
+			)
+
+			// Handle noise settings if mode is Noise
+			if transformMode == rule.TransformModeNoise {
+				// Parse MsgType
+				noiseMsgType, err := stringToMsgType(r.Transform.NoiseSettings.MsgType)
+				if err != nil {
+					return nil, errors.New("Invalid noise message type: " + err.Error())
+				}
+
+				// Parse Channel
+				noiseChannel, err := stringToFilterChannel(r.Transform.NoiseSettings.Channel)
+				if err != nil {
+					return nil, errors.New("Invalid noise channel: " + err.Error())
+				}
+
+				// Validate value ranges
+				if r.Transform.NoiseSettings.MaxValue > 127 {
+					return nil, errors.New("Noise MaxValue exceeds MIDI limit of 127")
+				}
+
+				// Create NoiseSettings struct
+				noiseSettings := rule.NoiseSettings{
+					MsgType:    noiseMsgType,
+					Channel:    noiseChannel,
+					MinValue:   uint8(r.Transform.NoiseSettings.MinValue),
+					MaxValue:   uint8(r.Transform.NoiseSettings.MaxValue),
+					DelayMsMin: uint16(r.Transform.NoiseSettings.DelayMsMin),
+					DelayMsMax: uint16(r.Transform.NoiseSettings.DelayMsMax),
+				}
+
+				// Set noise settings on the rule
+				newRule.SetNoiseSettings(noiseSettings)
+			}
 		}
 
 		//Drop consecutive identical values?
@@ -254,6 +304,7 @@ func LoadConfig(configPath string) (*router.MIDIRouter, error) {
 	return relay, nil
 }
 
+// Update the stringToTransformMode function to handle the new mode
 func stringToTransformMode(str string) (rule.TransformMode, error) {
 	switch str {
 	case "":
@@ -264,6 +315,8 @@ func stringToTransformMode(str string) (rule.TransformMode, error) {
 		return rule.TransformModeLinear, nil
 	case "LinearDrop":
 		return rule.TransformModeLinearDrop, nil
+	case "Noise":
+		return rule.TransformModeNoise, nil
 	default:
 		return rule.TransformModeNone, errors.New("Invalid transform mode: " + str)
 	}

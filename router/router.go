@@ -78,6 +78,52 @@ func (relay *MIDIRouter) AddRule(rule *rule.Rule) {
 	fmt.Println(rule)
 }
 
+// Add a method to schedule and send noise packets
+func (relay *MIDIRouter) SendNoisePacket(packet coremidi.Packet, delayMs time.Duration) {
+	if delayMs <= 0 {
+		// No delay needed, send immediately
+		if time.Since(relay.lastMIDIMsg) <= relay.sendLimit {
+			if relay.verbose {
+				fmt.Println("Ignoring noise MIDI message (send limit)")
+			}
+			return
+		}
+
+		if relay.verbose {
+			fmt.Printf("Sending noise packet immediately: %v\n",
+				hex.EncodeToString(packet.Data))
+		}
+
+		packet.Send(&relay.destPort, &relay.destination)
+		relay.lastMIDIMsg = time.Now()
+		return
+	}
+
+	// Create a goroutine only when we need a delay
+	go func() {
+		// Sleep for the specified delay
+		time.Sleep(delayMs)
+
+		// Check if we should still send (e.g., not too close to recent messages)
+		if time.Since(relay.lastMIDIMsg) <= relay.sendLimit {
+			if relay.verbose {
+				fmt.Println("Ignoring noise MIDI message (send limit)")
+			}
+			return
+		}
+
+		// Send the packet
+		if relay.verbose {
+			fmt.Printf("Sending noise packet after %v delay: %v\n",
+				delayMs,
+				hex.EncodeToString(packet.Data))
+		}
+
+		packet.Send(&relay.destPort, &relay.destination)
+		relay.lastMIDIMsg = time.Now()
+	}()
+}
+
 func (relay *MIDIRouter) onPacket(source coremidi.Source, packet coremidi.Packet) {
 	if relay.verbose {
 		fmt.Printf(
@@ -109,7 +155,7 @@ func (relay *MIDIRouter) onPacket(source coremidi.Source, packet coremidi.Packet
 }
 
 func (relay *MIDIRouter) handleSinglePacket(packet coremidi.Packet) {
-	if (relay.defaultPassThrough == true) {
+	if relay.defaultPassThrough == true {
 		if time.Since(relay.lastMIDIMsg) <= relay.sendLimit {
 			fmt.Println("Ignoring midi message (send limit)")
 			return
@@ -130,7 +176,8 @@ func (relay *MIDIRouter) handleSinglePacket(packet coremidi.Packet) {
 			continue
 		}
 
-		match, newPacket := r.Match(packet, relay.verbose)
+		// Pass relay to Match so it can schedule noise packets if needed
+		match, newPacket := r.Match(packet, relay.verbose, relay)
 		if match == rule.RuleMatchResultMatchInject {
 			if relay.verbose {
 				fmt.Println("-> Sending generated packet :")
