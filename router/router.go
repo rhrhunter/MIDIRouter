@@ -78,10 +78,11 @@ func (relay *MIDIRouter) AddRule(rule *rule.Rule) {
 	fmt.Println(rule)
 }
 
-// Add a method to schedule and send noise packets
-func (relay *MIDIRouter) SendNoisePacket(packet coremidi.Packet, delayMs time.Duration) {
+// Method to schedule and send noise packets
+func (relay *MIDIRouter) scheduleNoisePacket(packet coremidi.Packet, delayMs time.Duration) {
+	// For zero or negative delay, send immediately without a goroutine
 	if delayMs <= 0 {
-		// No delay needed, send immediately
+		// Check if we're within the send limit
 		if time.Since(relay.lastMIDIMsg) <= relay.sendLimit {
 			if relay.verbose {
 				fmt.Println("Ignoring noise MIDI message (send limit)")
@@ -90,21 +91,22 @@ func (relay *MIDIRouter) SendNoisePacket(packet coremidi.Packet, delayMs time.Du
 		}
 
 		if relay.verbose {
-			fmt.Printf("Sending noise packet immediately: %v\n",
+			fmt.Printf("Sending noise packet immediately after original message: %v\n",
 				hex.EncodeToString(packet.Data))
 		}
 
+		// Send the noise packet directly
 		packet.Send(&relay.destPort, &relay.destination)
 		relay.lastMIDIMsg = time.Now()
 		return
 	}
 
-	// Create a goroutine only when we need a delay
+	// For positive delays, use a goroutine
 	go func() {
-		// Sleep for the specified delay
+		// Use the specified delay
 		time.Sleep(delayMs)
 
-		// Check if we should still send (e.g., not too close to recent messages)
+		// Check if we're within the send limit
 		if time.Since(relay.lastMIDIMsg) <= relay.sendLimit {
 			if relay.verbose {
 				fmt.Println("Ignoring noise MIDI message (send limit)")
@@ -112,13 +114,13 @@ func (relay *MIDIRouter) SendNoisePacket(packet coremidi.Packet, delayMs time.Du
 			return
 		}
 
-		// Send the packet
 		if relay.verbose {
 			fmt.Printf("Sending noise packet after %v delay: %v\n",
 				delayMs,
 				hex.EncodeToString(packet.Data))
 		}
 
+		// Send the noise packet
 		packet.Send(&relay.destPort, &relay.destination)
 		relay.lastMIDIMsg = time.Now()
 	}()
@@ -176,23 +178,33 @@ func (relay *MIDIRouter) handleSinglePacket(packet coremidi.Packet) {
 			continue
 		}
 
-		// Pass relay to Match so it can schedule noise packets if needed
-		match, newPacket := r.Match(packet, relay.verbose, relay)
-		if match == rule.RuleMatchResultMatchInject {
+		// Get match result from rule
+		matchResult := r.Match(packet, relay.verbose)
+
+		if matchResult.Result == rule.RuleMatchResultMatchInject {
 			if relay.verbose {
 				fmt.Println("-> Sending generated packet :")
-				fmt.Println(hex.Dump(newPacket.Data))
+				fmt.Println(hex.Dump(matchResult.MainPacket.Data))
 			}
 
 			if time.Since(relay.lastMIDIMsg) <= relay.sendLimit {
 				fmt.Println("Ignoring midi message (send limit)")
 				return
 			}
-			newPacket.Send(&relay.destPort, &relay.destination)
+
+			// Send the main packet
+			matchResult.MainPacket.Send(&relay.destPort, &relay.destination)
 			relay.lastMIDIMsg = time.Now()
+
+			// Handle noise packet if present
+			if matchResult.NoisePacket != nil {
+				// Schedule/send noise packet after the main packet is sent
+				relay.scheduleNoisePacket(*matchResult.NoisePacket, matchResult.NoiseDelayMs)
+			}
+
 			ruleMatched = true
 			break
-		} else if match == rule.RuleMatchResultMatchNoInject {
+		} else if matchResult.Result == rule.RuleMatchResultMatchNoInject {
 			ruleMatched = true
 			break
 		}

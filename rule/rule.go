@@ -28,13 +28,6 @@ const (
 	TransformModeLinearDrop       = iota
 	TransformModeNoise            = iota
 	TransformModePreventRunStatus = iota // New mode to prevent MIDI running status
-	/*
-		Transform7bitsTo100   = iota // Convert a 7bits [0-127] value to a displayed [0-100] value
-		Transform14bitsTo100  = iota // Convert a 14bits [0-16383] value to a displayed [0-100] value
-		Transform7bitsTo1000  = iota // Convert a 7bits [0-127] value to a displayed [0-1000] value
-		Transform14bitsTo1000 = iota // Convert a 14bits [0-16383] value to a displayed [0-1000] value
-		Transform7bitsTo127   = iota // Convert a 7bits [0-127] value to a [0-127] value
-		Transform14bitsTo127  = iota // Convert a 14bits [0-16383] value to a [0-127] value*/
 )
 
 // Define a new NoiseSettings struct
@@ -53,8 +46,15 @@ type Transform struct {
 	fromMax       uint32
 	toMin         uint32
 	toMax         uint32
-	noiseSettings NoiseSettings // New field for noise settings
-	// No additional settings needed for PreventRunStatus
+	noiseSettings NoiseSettings // Field for noise settings
+}
+
+// Define a new struct to represent the match result
+type MatchResult struct {
+	Result       RuleMatchResult
+	MainPacket   coremidi.Packet
+	NoisePacket  *coremidi.Packet // Pointer so it can be nil if no noise
+	NoiseDelayMs time.Duration    // Delay in ms for noise packet
 }
 
 type Rule struct {
@@ -95,7 +95,7 @@ func (r *Rule) SetTransform(mode TransformMode, fromMin uint32, fromMax uint32, 
 	}
 }
 
-// Add a method to set noise settings
+// Method to set noise settings
 func (r *Rule) SetNoiseSettings(noiseSettings NoiseSettings) {
 	r.transform.noiseSettings = noiseSettings
 }
@@ -121,7 +121,7 @@ func (r *Rule) SetGenerator(g generatorinterface.GeneratorInterface) error {
 	return nil
 }
 
-// Add new function to generate a noise packet
+// Function to generate a noise packet
 func (r *Rule) generateNoisePacket(packet coremidi.Packet, value uint16) coremidi.Packet {
 	// Get random values for noise
 	ns := r.transform.noiseSettings
@@ -133,7 +133,6 @@ func (r *Rule) generateNoisePacket(packet coremidi.Packet, value uint16) coremid
 	}
 
 	// Create status byte based on message type and channel
-	// Fix: Properly convert to byte with appropriate casting
 	msgType := byte(ns.MsgType)
 	channel := byte(ns.Channel)
 	statusByte := byte((msgType << 4) | channel)
@@ -156,28 +155,31 @@ func (r *Rule) generateNoisePacket(packet coremidi.Packet, value uint16) coremid
 	return coremidi.NewPacket(data, packet.TimeStamp)
 }
 
-// Update the Match method to handle noise and prevent running status
-func (r *Rule) Match(packet coremidi.Packet, verbose bool, router interface{}) (RuleMatchResult, coremidi.Packet) {
+// Updated Match method that returns MatchResult
+func (r *Rule) Match(packet coremidi.Packet, verbose bool) MatchResult {
 	msgType := filter.FilterMsgType((packet.Data[0] & 0xF0) >> 4)
 	channel := filter.FilterChannel(packet.Data[0] & 0x0F)
+
 	if r.filter.QuickMatch(msgType, channel) == false {
-		return RuleMatchResultNoMatch, packet
+		return MatchResult{Result: RuleMatchResultNoMatch, MainPacket: packet}
 	}
 
 	result, value := r.filter.Match(packet)
 	if result == filterinterface.FilterMatchResult_NoMatch {
-		return RuleMatchResultNoMatch, packet
+		return MatchResult{Result: RuleMatchResultNoMatch, MainPacket: packet}
 	}
 
 	if result == filterinterface.FilterMatchResult_MatchNoValue {
 		if verbose {
 			fmt.Println("Filter match (no value)")
 		}
-		return RuleMatchResultMatchNoInject, packet
+		return MatchResult{Result: RuleMatchResultMatchNoInject, MainPacket: packet}
 	}
+
 	if result != filterinterface.FilterMatchResult_Match {
-		return RuleMatchResultNoMatch, packet
+		return MatchResult{Result: RuleMatchResultNoMatch, MainPacket: packet}
 	}
+
 	if verbose {
 		fmt.Println("Filter", r.String(), "matched. Extracted value:", value)
 		fmt.Println("-> Extracted value:", value)
@@ -185,54 +187,51 @@ func (r *Rule) Match(packet coremidi.Packet, verbose bool, router interface{}) (
 
 	// Transform the value based on transform mode
 	transformedValue := value
+	var noisePacket *coremidi.Packet
+	var noiseDelayMs time.Duration
+
 	switch r.transform.mode {
 	case TransformModeLinear:
 		// Linear transformation logic
 		a := float64(r.transform.toMax-r.transform.toMin) / float64(r.transform.fromMax-r.transform.fromMin)
 		b := float64(r.transform.toMin) - a*float64(r.transform.fromMin)
 		transformedValue = uint16(a*float64(value) + float64(b))
+
 	case TransformModeLinearDrop:
 		// Check bounds and apply linear transformation
 		if (uint32(value) > r.transform.fromMax) || (uint32(value) < r.transform.fromMin) {
 			fmt.Println("-> Transform dropped out of bounds input value")
-			return RuleMatchResultNoMatch, packet
+			return MatchResult{Result: RuleMatchResultNoMatch, MainPacket: packet}
 		}
 		a := float64(r.transform.toMax-r.transform.toMin) / float64(r.transform.fromMax-r.transform.fromMin)
 		b := float64(r.transform.toMin) - a*float64(r.transform.fromMin)
 		v := uint16(a*float64(value) + float64(b))
 		if (uint32(v) > r.transform.toMax) || (uint32(v) < r.transform.toMin) {
 			fmt.Println("-> Transform dropped out of bounds output value")
-			return RuleMatchResultNoMatch, packet
+			return MatchResult{Result: RuleMatchResultNoMatch, MainPacket: packet}
 		}
 		transformedValue = v
+
 	case TransformModeNoise:
 		// Apply normal linear transformation first
 		a := float64(r.transform.toMax-r.transform.toMin) / float64(r.transform.fromMax-r.transform.fromMin)
 		b := float64(r.transform.toMin) - a*float64(r.transform.fromMin)
 		transformedValue = uint16(a*float64(value) + float64(b))
 
-		// Generate and schedule noise packet to be sent after the main packet
+		// Generate noise packet
 		if verbose {
 			fmt.Println("-> Generating noise packet")
 		}
-		noisePacket := r.generateNoisePacket(packet, value)
+		np := r.generateNoisePacket(packet, value)
+		noisePacket = &np
 
-		// Schedule noise packet to be sent after a random delay
+		// Calculate delay for noise packet
 		ns := r.transform.noiseSettings
-		delayMs := ns.DelayMsMin
+		delayValue := ns.DelayMsMin
 		if ns.DelayMsMax > ns.DelayMsMin {
-			delayMs = ns.DelayMsMin + uint16(rand.Intn(int(ns.DelayMsMax-ns.DelayMsMin+1)))
+			delayValue = ns.DelayMsMin + uint16(rand.Intn(int(ns.DelayMsMax-ns.DelayMsMin+1)))
 		}
-
-		// Use the router to send the noise packet with delay
-		if midiRouter, ok := router.(MIDIRouter); ok {
-			midiRouter.SendNoisePacket(noisePacket, time.Duration(delayMs)*time.Millisecond)
-			if verbose {
-				fmt.Println("-> Scheduled noise packet with delay", delayMs, "ms")
-			}
-		} else if verbose {
-			fmt.Println("-> Cannot send noise packet: router not available")
-		}
+		noiseDelayMs = time.Duration(delayValue) * time.Millisecond
 	}
 
 	if verbose {
@@ -242,7 +241,7 @@ func (r *Rule) Match(packet coremidi.Packet, verbose bool, router interface{}) (
 	// Apply duplicate check
 	if r.dropDuplicates && (r.lastValue == transformedValue) && (time.Since(r.lastValueTs) < r.dropDuplicatesTimeout) {
 		fmt.Println("-> Ignored duplicate")
-		return RuleMatchResultMatchNoInject, packet
+		return MatchResult{Result: RuleMatchResultMatchNoInject, MainPacket: packet}
 	}
 	r.lastValue = transformedValue
 	r.lastValueTs = time.Now()
@@ -251,7 +250,7 @@ func (r *Rule) Match(packet coremidi.Packet, verbose bool, router interface{}) (
 	newPacket, err := r.output(packet, transformedValue)
 	if err != nil {
 		fmt.Println(err)
-		return RuleMatchResultMatchInject, packet
+		return MatchResult{Result: RuleMatchResultMatchInject, MainPacket: packet}
 	}
 
 	// Apply PreventRunningStatus mode if enabled
@@ -259,10 +258,15 @@ func (r *Rule) Match(packet coremidi.Packet, verbose bool, router interface{}) (
 		newPacket = r.preventRunningStatus(newPacket, msgType, channel)
 	}
 
-	return RuleMatchResultMatchInject, newPacket
+	return MatchResult{
+		Result:       RuleMatchResultMatchInject,
+		MainPacket:   newPacket,
+		NoisePacket:  noisePacket,
+		NoiseDelayMs: noiseDelayMs,
+	}
 }
 
-// Add method to prevent running status
+// Method to prevent running status
 func (r *Rule) preventRunningStatus(packet coremidi.Packet, msgType filter.FilterMsgType, channel filter.FilterChannel) coremidi.Packet {
 	// Always force the full status byte to be included in each message
 	// This prevents MIDI running status optimization where status byte is omitted
@@ -317,9 +321,4 @@ func (t Transform) String() string {
 		return "Prevent MIDI Running Status"
 	}
 	return "?"
-}
-
-// Define MIDIRouter interface for use in Match
-type MIDIRouter interface {
-	SendNoisePacket(packet coremidi.Packet, delayMs time.Duration)
 }
