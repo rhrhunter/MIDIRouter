@@ -28,7 +28,7 @@ jobs:
       run: cd /Users/runner/work/MIDIRouter/MIDIRouter/cmd/midirouter/ && go build
 
     - name: Push Binary
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: midi-router
         path: /Users/runner/work/MIDIRouter/MIDIRouter/cmd/midirouter/midirouter
