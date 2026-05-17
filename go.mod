@@ -1,5 +1,5 @@
 module MIDIRouter
 
-go 1.23.5
+go 1.26
 
-require github.com/youpy/go-coremidi v0.0.0-20241117111815-4e11c355831c
+require github.com/youpy/go-coremidi v0.0.0-20260517101439-330d8c631ea2

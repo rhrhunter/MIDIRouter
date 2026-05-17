@@ -2,3 +2,5 @@ github.com/youpy/go-coremidi v0.0.0-20210828055444-d16028a71dfe h1:YnIUnee8uwqdu
 github.com/youpy/go-coremidi v0.0.0-20210828055444-d16028a71dfe/go.mod h1:JECUA7NazToXvXOjdf3ZXbqBk/LjRx+5GI3geQfi4L4=
 github.com/youpy/go-coremidi v0.0.0-20241117111815-4e11c355831c h1:xdiwAgBnLGG89V9NfnZDZd998wepWvJq+xMrCpJhb98=
 github.com/youpy/go-coremidi v0.0.0-20241117111815-4e11c355831c/go.mod h1:JECUA7NazToXvXOjdf3ZXbqBk/LjRx+5GI3geQfi4L4=
+github.com/youpy/go-coremidi v0.0.0-20260517101439-330d8c631ea2 h1:zVj2Xznhu1jPSUPDm3iATA/SyLkt5xrIzi7Wnkb/lBE=
+github.com/youpy/go-coremidi v0.0.0-20260517101439-330d8c631ea2/go.mod h1:/bfyGKHMJJtZQBtPVDmi+SCHsNKKHcFL85Rzq8SA98c=
