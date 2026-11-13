@@ -23,7 +23,7 @@ help: ## Display this help message
 # Build the application
 .PHONY: build
 build: ## Build the application
-	go build $(GOFLAGS) $(BUILD_FLAGS) -o $(BIN_DIR)/$(BIN_NAME) $(CMD_DIR)/$(BIN_NAME).go
+	go build $(GOFLAGS) $(BUILD_FLAGS) -o $(BIN_DIR)/$(BIN_NAME) ./$(CMD_DIR)/
 
 # Clean build artifacts
 .PHONY: clean
@@ -63,11 +63,15 @@ deps: ## Ensure dependencies are installed
 # Build for specific platforms
 .PHONY: build-linux
 build-linux: ## Build for Linux
-	GOOS=linux GOARCH=amd64 go build $(GOFLAGS) $(BUILD_FLAGS) -o $(BIN_DIR)/$(BIN_NAME)-linux-amd64 $(CMD_DIR)/$(BIN_NAME).go
+	GOOS=linux GOARCH=amd64 go build $(GOFLAGS) $(BUILD_FLAGS) -o $(BIN_DIR)/$(BIN_NAME)-linux-amd64 ./$(CMD_DIR)/
 
 .PHONY: build-macos
 build-macos: ## Build for macOS
-	GOOS=darwin GOARCH=amd64 go build $(GOFLAGS) $(BUILD_FLAGS) -o $(BIN_DIR)/$(BIN_NAME)-macos-amd64 $(CMD_DIR)/$(BIN_NAME).go
+	GOOS=darwin GOARCH=arm64 go build $(GOFLAGS) $(BUILD_FLAGS) -o $(BIN_DIR)/$(BIN_NAME)-macos-arm64 ./$(CMD_DIR)/
+
+.PHONY: build-macos-amd64
+build-macos-amd64: ## Build for macOS (Intel/AMD64)
+	GOOS=darwin GOARCH=amd64 go build $(GOFLAGS) $(BUILD_FLAGS) -o $(BIN_DIR)/$(BIN_NAME)-macos-amd64 ./$(CMD_DIR)/
 
 .PHONY: build-windows
 build-windows: ## Build for Windows
