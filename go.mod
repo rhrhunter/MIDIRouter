@@ -4,7 +4,7 @@ go 1.27
 
 require (
 	github.com/spf13/cobra v1.10.2
-	github.com/youpy/go-coremidi v0.0.0-20241117111815-4e11c355831c
+	github.com/youpy/go-coremidi v0.0.0-20260517101439-330d8c631ea2
 )
 
 require (
